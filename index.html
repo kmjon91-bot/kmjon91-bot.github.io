@@ -19,6 +19,7 @@
             align-items: center;
             justify-content: center;
             padding: 20px;
+            overflow-x: hidden;
         }
 
         .container {
@@ -26,7 +27,6 @@
             max-width: 500px;
         }
 
-        /* 업로드 화면 */
         .upload-screen {
             background: rgba(20, 10, 40, 0.95);
             border: 3px solid #ff6600;
@@ -90,7 +90,6 @@
             display: none;
         }
 
-        /* 애니메이션 화면 */
         .animation-screen {
             display: none;
             text-align: center;
@@ -100,15 +99,24 @@
             display: block;
         }
 
-        #animationCanvas {
-            width: 100%;
-            max-width: 500px;
+        .canvas-container {
+            position: relative;
+            margin: 0 auto 30px;
             border: 3px solid #ff6600;
             border-radius: 15px;
+            overflow: hidden;
             background: #000;
-            display: block;
-            margin: 0 auto 30px;
             box-shadow: 0 0 20px rgba(255, 102, 0, 0.4);
+        }
+
+        #animationCanvas {
+            width: 100%;
+            display: block;
+            max-width: 500px;
+        }
+
+        #sourceCanvas {
+            display: none;
         }
 
         .button-group {
@@ -157,7 +165,6 @@
 </head>
 <body>
     <div class="container">
-        <!-- 업로드 화면 -->
         <div class="upload-screen" id="uploadScreen">
             <div class="title">👻 무서운 변신기 🎃</div>
             <div class="upload-box" onclick="document.getElementById('fileInput').click()">
@@ -168,18 +175,26 @@
             <input type="file" id="fileInput" accept="image/*">
         </div>
 
-        <!-- 애니메이션 화면 -->
         <div class="animation-screen" id="animationScreen">
             <div class="loading" id="loading">⚡ 무서운 마법 시전 중... ⚡</div>
-            <canvas id="animationCanvas"></canvas>
+            <div class="canvas-container">
+                <canvas id="animationCanvas"></canvas>
+            </div>
             <div class="button-group">
                 <button onclick="resetUpload()">🔄 다시 올리기</button>
             </div>
         </div>
     </div>
 
+    <canvas id="sourceCanvas" style="display:none;"></canvas>
+
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js"></script>
+
     <script>
         let uploadedImage = null;
+        let animationRunning = false;
+        let facesDetected = [];
 
         document.getElementById('fileInput').addEventListener('change', handleImageUpload);
 
@@ -193,7 +208,7 @@
                 img.onload = () => {
                     uploadedImage = img;
                     showAnimationScreen();
-                    startAnimation();
+                    detectFacesAndAnimate();
                 };
                 img.src = event.target.result;
             };
@@ -209,43 +224,79 @@
             canvas.height = uploadedImage.height;
         }
 
+        async function detectFacesAndAnimate() {
+            const faceDetection = new FaceDetection({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`
+            });
+
+            faceDetection.setOptions({
+                model: 'short_range'
+            });
+
+            const sourceCanvas = document.getElementById('sourceCanvas');
+            const sourceCtx = sourceCanvas.getContext('2d');
+            sourceCanvas.width = uploadedImage.width;
+            sourceCanvas.height = uploadedImage.height;
+            sourceCtx.drawImage(uploadedImage, 0, 0);
+
+            faceDetection.onResults(onFacesDetected);
+
+            await faceDetection.send({ image: sourceCanvas });
+        }
+
+        function onFacesDetected(results) {
+            facesDetected = results.detections || [];
+            document.getElementById('loading').style.display = 'none';
+            startAnimation();
+        }
+
         function startAnimation() {
             const canvas = document.getElementById('animationCanvas');
             const ctx = canvas.getContext('2d');
 
-            document.getElementById('loading').style.display = 'block';
-
             let frame = 0;
             const maxFrames = 120;
             const fps = 24;
+            animationRunning = true;
 
             function animate() {
+                if (!animationRunning) return;
+
                 ctx.fillStyle = '#000';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-                const rotation = Math.sin(frame * 0.1) * 0.05;
-                const scale = 1 + Math.sin(frame * 0.08) * 0.15;
+                // 전체 이미지에 효과 적용
+                const rotation = Math.sin(frame * 0.08) * 0.03;
+                const scale = 1 + Math.sin(frame * 0.06) * 0.1;
+                const offsetY = Math.sin(frame * 0.1) * 8;
 
                 ctx.save();
                 ctx.translate(canvas.width / 2, canvas.height / 2);
                 ctx.rotate(rotation);
                 ctx.scale(scale, scale);
-                ctx.translate(-canvas.width / 2, -canvas.height / 2);
+                ctx.translate(-canvas.width / 2, -canvas.height / 2 + offsetY);
 
+                // 필터 적용
                 ctx.globalAlpha = 1;
                 ctx.filter = getFilter(frame);
                 ctx.drawImage(uploadedImage, 0, 0);
 
                 ctx.restore();
 
-                drawEffects(ctx, canvas, frame);
+                // 오버레이 효과
+                drawAnimationEffects(ctx, canvas, frame);
+
+                // 얼굴이 감지되면 눈/입 애니메이션
+                if (facesDetected.length > 0) {
+                    drawFaceAnimations(ctx, canvas, frame);
+                }
 
                 frame++;
 
                 if (frame < maxFrames) {
                     setTimeout(animate, 1000 / fps);
                 } else {
-                    document.getElementById('loading').style.display = 'none';
+                    animationRunning = false;
                 }
             }
 
@@ -253,33 +304,33 @@
         }
 
         function getFilter(frame) {
-            const brightness = 0.6 + Math.sin(frame * 0.12) * 0.25;
+            const brightness = 0.65 + Math.sin(frame * 0.12) * 0.25;
 
             if (frame % 20 < 2) {
-                return `brightness(1.4) contrast(1.5) saturate(1.2) hue-rotate(-20deg)`;
+                return `brightness(1.5) contrast(1.6) saturate(1.3) hue-rotate(-25deg)`;
             }
 
-            return `brightness(${brightness}) contrast(1.4) saturate(1.3) hue-rotate(-10deg)`;
+            return `brightness(${brightness}) contrast(1.45) saturate(1.35) hue-rotate(-12deg)`;
         }
 
-        function drawEffects(ctx, canvas, frame) {
+        function drawAnimationEffects(ctx, canvas, frame) {
             const w = canvas.width;
             const h = canvas.height;
 
             // 글리치 효과
-            if (Math.random() > 0.7) {
-                ctx.fillStyle = `rgba(255, 0, 0, 0.3)`;
+            if (Math.random() > 0.75) {
+                ctx.fillStyle = `rgba(255, 0, 0, 0.25)`;
                 const y = Math.random() * h;
-                const height = Math.random() * 30 + 5;
-                const offset = Math.random() * 50 - 25;
+                const height = Math.random() * 25 + 8;
+                const offset = Math.random() * 40 - 20;
                 ctx.fillRect(offset, y, w - Math.abs(offset) * 2, height);
             }
 
             // 스캔라인
-            if (frame % 5 === 0) {
-                ctx.strokeStyle = `rgba(255, 255, 255, 0.1)`;
+            if (frame % 4 === 0) {
+                ctx.strokeStyle = `rgba(255, 255, 255, 0.08)`;
                 ctx.lineWidth = 1;
-                for (let i = 0; i < h; i += 4) {
+                for (let i = 0; i < h; i += 3) {
                     ctx.beginPath();
                     ctx.moveTo(0, i);
                     ctx.lineTo(w, i);
@@ -287,67 +338,115 @@
                 }
             }
 
-            // 빨간 플래시
-            if (frame % 15 < 2) {
-                ctx.fillStyle = `rgba(255, 0, 0, ${Math.random() * 0.4})`;
+            // 플래시
+            if (frame % 18 < 2) {
+                ctx.fillStyle = `rgba(255, 0, 0, ${Math.random() * 0.35})`;
                 ctx.fillRect(0, 0, w, h);
             }
 
             // 테두리
             ctx.strokeStyle = '#ff6600';
-            ctx.lineWidth = 3;
+            ctx.lineWidth = 2;
             ctx.strokeRect(0, 0, w, h);
+        }
 
-            // 떨어지는 눈물 효과
-            if (frame % 30 < 20) {
-                ctx.fillStyle = `rgba(255, 0, 0, 0.5)`;
-                const eyeX = w * (0.2 + Math.sin(frame * 0.05) * 0.15);
-                const eyeY = h * 0.25;
-                const dropLength = Math.sin(frame * 0.1) * 40;
-                
-                ctx.beginPath();
-                ctx.arc(eyeX, eyeY, 15, 0, Math.PI * 2);
-                ctx.fill();
-                
-                if (dropLength > 0) {
-                    ctx.fillRect(eyeX - 3, eyeY + 15, 6, dropLength);
+        function drawFaceAnimations(ctx, canvas, frame) {
+            const w = canvas.width;
+            const h = canvas.height;
+
+            facesDetected.forEach((detection) => {
+                const boundingBox = detection.boundingBox;
+                const start = boundingBox.xMin * w;
+                const top = boundingBox.yMin * h;
+                const width = boundingBox.width * w;
+                const height = boundingBox.height * h;
+
+                // 얼굴 중심
+                const centerX = start + width / 2;
+                const centerY = top + height / 2;
+
+                // 눈 위치 (얼굴 상단 1/3)
+                const eyeY = top + height * 0.25;
+                const leftEyeX = centerX - width * 0.15;
+                const rightEyeX = centerX + width * 0.15;
+
+                // 눈이 살아있게 움직임
+                const eyeMovement = Math.sin(frame * 0.15) * 0.3;
+                const eyeBlinkAmount = Math.abs(Math.sin(frame * 0.2));
+
+                // 왼쪽 눈
+                drawLivingEye(ctx, leftEyeX, eyeY, width * 0.08, frame, eyeBlinkAmount, eyeMovement);
+
+                // 오른쪽 눈
+                drawLivingEye(ctx, rightEyeX, eyeY, width * 0.08, frame, eyeBlinkAmount, eyeMovement);
+
+                // 입 위치
+                const mouthY = top + height * 0.75;
+                drawLivingMouth(ctx, centerX, mouthY, width * 0.2, frame);
+
+                // 눈물 효과
+                if (frame % 30 < 20) {
+                    const dropLength = Math.sin(frame * 0.12) * (height * 0.15);
+                    if (dropLength > 2) {
+                        ctx.fillStyle = `rgba(255, 0, 0, 0.4)`;
+                        ctx.fillRect(leftEyeX - 2, eyeY + width * 0.08, 4, dropLength);
+                        ctx.fillRect(rightEyeX - 2, eyeY + width * 0.08, 4, dropLength);
+                    }
                 }
+            });
+        }
 
-                const eyeX2 = w * (0.8 - Math.sin(frame * 0.05) * 0.15);
-                ctx.beginPath();
-                ctx.arc(eyeX2, eyeY, 15, 0, Math.PI * 2);
-                ctx.fill();
-                
-                if (dropLength > 0) {
-                    ctx.fillRect(eyeX2 - 3, eyeY + 15, 6, dropLength);
-                }
-            }
+        function drawLivingEye(ctx, x, y, size, frame, blink, movement) {
+            // 깜빡임
+            const eyeHeight = size * (1 - blink * 0.8);
 
-            // 입 모양
-            if (frame % 40 > 10 && frame % 40 < 30) {
+            // 흰자
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.ellipse(x, y, size * 0.8, eyeHeight * 0.6, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 동공 (움직임 있음)
+            const pupilX = x + Math.sin(frame * 0.12) * size * 0.3;
+            const pupilY = y + Math.cos(frame * 0.15) * eyeHeight * 0.2;
+
+            ctx.fillStyle = '#ff0000';
+            ctx.beginPath();
+            ctx.arc(pupilX, pupilY, size * 0.4, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 빛 반사
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+            ctx.beginPath();
+            ctx.arc(pupilX - size * 0.15, pupilY - size * 0.15, size * 0.15, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        function drawLivingMouth(ctx, x, y, width, frame) {
+            const mouthOpen = Math.abs(Math.sin(frame * 0.18)) * 0.7;
+
+            if (frame % 35 > 8) {
                 ctx.strokeStyle = '#ff0000';
-                ctx.lineWidth = 4;
+                ctx.lineWidth = 3;
                 ctx.beginPath();
-                ctx.moveTo(w * 0.3, h * 0.8);
-                ctx.quadraticCurveTo(w * 0.5, h * 0.9, w * 0.7, h * 0.8);
+                ctx.moveTo(x - width / 2, y);
+                ctx.quadraticCurveTo(x, y + width * 0.3 * mouthOpen, x + width / 2, y);
                 ctx.stroke();
-            }
 
-            // 이모지 팝업
-            if (frame % 50 > 35 && frame % 50 < 45) {
-                const emojis = ['😱', '👻', '💀', '😵', '🤮'];
-                const emoji = emojis[Math.floor(Math.random() * emojis.length)];
-                ctx.font = `bold ${Math.min(w, h) * 0.25}px Arial`;
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.globalAlpha = 0.7 + Math.random() * 0.3;
-                ctx.fillText(emoji, w * 0.5, h * 0.5);
-                ctx.globalAlpha = 1;
+                // 혀
+                if (mouthOpen > 0.5) {
+                    ctx.fillStyle = `rgba(255, 100, 100, 0.5)`;
+                    ctx.beginPath();
+                    ctx.ellipse(x, y + width * 0.2 * mouthOpen, width * 0.15, width * 0.1 * mouthOpen, 0, 0, Math.PI * 2);
+                    ctx.fill();
+                }
             }
         }
 
         function resetUpload() {
             uploadedImage = null;
+            animationRunning = false;
+            facesDetected = [];
             document.getElementById('uploadScreen').classList.remove('hidden');
             document.getElementById('animationScreen').classList.remove('active');
             document.getElementById('fileInput').value = '';
